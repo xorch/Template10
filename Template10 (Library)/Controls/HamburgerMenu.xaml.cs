@@ -5,12 +5,14 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
+using Template10.Common;
 using Template10.Services.KeyboardService;
 using Template10.Services.NavigationService;
 using Template10.Utils;
 using Windows.UI;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
+using Windows.UI.Xaml.Controls.Primitives;
 using Windows.UI.Xaml.Data;
 using Windows.UI.Xaml.Markup;
 using Windows.UI.Xaml.Media;
@@ -21,6 +23,9 @@ namespace Template10.Controls
     [ContentProperty(Name = nameof(PrimaryButtons))]
     public sealed partial class HamburgerMenu : UserControl, INotifyPropertyChanged
     {
+        public event EventHandler PaneOpen;
+        public event EventHandler PaneClosed;
+
         public HamburgerMenu()
         {
             InitializeComponent();
@@ -35,10 +40,17 @@ namespace Template10.Controls
                 new KeyboardService().AfterWindowZGesture = () => { HamburgerCommand.Execute(null); };
                 ShellSplitView.RegisterPropertyChangedCallback(SplitView.IsPaneOpenProperty, (d, e) =>
                 {
+                    // secondary layout
                     if (SecondaryButtonOrientation.Equals(Orientation.Horizontal) && ShellSplitView.IsPaneOpen)
                         _SecondaryButtonStackPanel.Orientation = Orientation.Horizontal;
                     else
                         _SecondaryButtonStackPanel.Orientation = Orientation.Vertical;
+
+                    // overall events
+                    if (ShellSplitView.IsPaneOpen)
+                        PaneOpen?.Invoke(ShellSplitView, EventArgs.Empty);
+                    else
+                        PaneClosed?.Invoke(ShellSplitView, EventArgs.Empty);
                 });
                 ShellSplitView.RegisterPropertyChangedCallback(SplitView.DisplayModeProperty, (d, e) =>
                 {
@@ -109,7 +121,7 @@ namespace Template10.Controls
             set { SetValue(VisualStateSettingProperty, value); }
         }
         public static readonly DependencyProperty VisualStateSettingProperty =
-            DependencyProperty.Register("VisualStateSetting", typeof(VisualStateSettings), 
+            DependencyProperty.Register("VisualStateSetting", typeof(VisualStateSettings),
                 typeof(HamburgerMenu), new PropertyMetadata(VisualStateSettings.Auto, VisualStateSettingChanged));
         private static void VisualStateSettingChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
@@ -131,7 +143,7 @@ namespace Template10.Controls
         }
         public static readonly DependencyProperty VisualStateNarrowMinWidthProperty =
             DependencyProperty.Register(nameof(VisualStateNarrowMinWidth), typeof(double),
-                typeof(HamburgerMenu), new PropertyMetadata((double)0, (d, e) => { (d as HamburgerMenu).VisualStateNarrowMinWidth = (double)e.NewValue; }));
+                typeof(HamburgerMenu), new PropertyMetadata((double)-1, (d,e)=> { Changed(nameof(VisualStateNarrowMinWidth), e); }));
 
         public double VisualStateNormalMinWidth
         {
@@ -140,7 +152,7 @@ namespace Template10.Controls
         }
         public static readonly DependencyProperty VisualStateNormalMinWidthProperty =
             DependencyProperty.Register(nameof(VisualStateNormalMinWidth), typeof(double),
-                typeof(HamburgerMenu), new PropertyMetadata((double)521, (d, e) => { (d as HamburgerMenu).VisualStateNormalMinWidth = (double)e.NewValue; }));
+                typeof(HamburgerMenu), new PropertyMetadata((double)0, (d, e) => { Changed(nameof(VisualStateNormalMinWidth), e); }));
 
         public double VisualStateWideMinWidth
         {
@@ -149,7 +161,11 @@ namespace Template10.Controls
         }
         public static readonly DependencyProperty VisualStateWideMinWidthProperty =
             DependencyProperty.Register(nameof(VisualStateWideMinWidth), typeof(double),
-                typeof(HamburgerMenu), new PropertyMetadata((double)-1, (d, e) => { (d as HamburgerMenu).VisualStateWideMinWidth = (double)e.NewValue; }));
+                typeof(HamburgerMenu), new PropertyMetadata((double)-1, (d, e) => { Changed(nameof(VisualStateWideMinWidth), e); }));
+
+        private static void Changed(string v, DependencyPropertyChangedEventArgs e)
+        {
+        }
 
         #endregion
 
@@ -458,6 +474,26 @@ namespace Template10.Controls
             set
             {
                 _navigationService = value;
+
+                #region BottomAppBar
+
+                var bottomAppBarDelay = 1000;
+                NavigationService.FrameFacade.Navigated += (s, e) =>
+                {
+                    StartAppBar(e.Page);
+                    WindowWrapper.Current().Dispatcher.Dispatch(() => { StartAppBar(e.Page); }, bottomAppBarDelay);
+                };
+                NavigationService.FrameFacade.Navigating += (s, e) => StopAppBar(e.Page);
+                NavigationService.AfterRestoreSavedNavigation += (s, e) =>
+                {
+                    StartAppBar(NavigationService.FrameFacade.Content as Page);
+                    WindowWrapper.Current().Dispatcher.Dispatch(() => { StartAppBar(NavigationService.FrameFacade.Content as Page); }, bottomAppBarDelay);
+                };
+                StartAppBar(NavigationService.FrameFacade.Content as Page);
+                WindowWrapper.Current().Dispatcher.Dispatch(() => { StartAppBar(NavigationService.FrameFacade.Content as Page); }, bottomAppBarDelay);
+
+                #endregion
+
                 if (NavigationService.Frame.BackStackDepth > 0)
                 {
                     // display content inside the splitview
@@ -470,8 +506,8 @@ namespace Template10.Controls
                     NavigationService.FrameFacade.Navigated += (s, e) => UpdateFullScreen(IsFullScreen);
                     UpdateFullScreen(true);
                 }
-                NavigationService.FrameFacade.Navigated += (s, e) => HighlightCorrectButton(e.PageType, e.Parameter);
                 NavigationService.AfterRestoreSavedNavigation += (s, e) => HighlightCorrectButton();
+                NavigationService.FrameFacade.Navigated += (s, e) => HighlightCorrectButton(e.PageType, e.Parameter);
                 ShellSplitView.RegisterPropertyChangedCallback(SplitView.IsPaneOpenProperty, (s, e) =>
                 {
                     // update width
@@ -546,6 +582,52 @@ namespace Template10.Controls
         public static readonly DependencyProperty HeaderContentProperty =
             DependencyProperty.Register(nameof(HeaderContent), typeof(UIElement),
                 typeof(HamburgerMenu), null);
+
+        #endregion
+
+        #region BottomAppBar
+
+        private void StartAppBar(Page page)
+        {
+            if (page?.BottomAppBar != null)
+            {
+                page.BottomAppBar.Opened -= BottomAppBar_Handler;
+                page.BottomAppBar.Opened += BottomAppBar_Handler;
+                page.BottomAppBar.Closing -= BottomAppBar_Handler;
+                page.BottomAppBar.Closing += BottomAppBar_Handler;
+                UpdateAppBar(page.BottomAppBar);
+            }
+        }
+
+        private void StopAppBar(Page page)
+        {
+            if (page?.BottomAppBar != null)
+            {
+                page.BottomAppBar.Opened -= BottomAppBar_Handler;
+                page.BottomAppBar.Closing -= BottomAppBar_Handler;
+                UpdateAppBar(null);
+            }
+        }
+
+        private void BottomAppBar_Handler(object sender, object e)
+        {
+            UpdateAppBar(sender as AppBar);
+        }
+
+        private void UpdateAppBar(AppBar appbar)
+        {
+            var height = 0d;
+            if (appbar == null)
+                height = 0d;
+            else if (appbar.Visibility == Visibility.Collapsed)
+                height = 0d;
+            else if (appbar.IsOpen)
+                height = ((appbar.Content as FrameworkElement)?.ActualHeight ?? appbar.ActualHeight);
+            else
+                height = appbar.ActualHeight;
+            PaneContent.Margin = new Thickness(PaneContent.Margin.Left, PaneContent.Margin.Top, PaneContent.Margin.Right, height);
+            PaneContent.InvalidateMeasure();
+        }
 
         #endregion
 
